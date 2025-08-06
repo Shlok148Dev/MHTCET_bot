@@ -34,7 +34,7 @@ Session(app)
 api_key = os.environ.get("OPENROUTER_API_KEY")
 if not api_key:
     # Fallback to a placeholder if the key is not found in environment variables
-    api_key = "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" # PASTE YOUR KEY HERE
+    api_key = "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" # PASTE YOUR KEY HERE
     logger.warning("OPENROUTER_API_KEY not found in environment. Using placeholder key.")
 
 # This is the modern (v1.x) way to initialize the OpenAI client
