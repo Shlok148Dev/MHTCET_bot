@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MHT-CET Admissions Chatbot</title>
+    <style>
+        :root {
+            --background-color: #000000; /* Black background */
+            --chat-bg: #121212; /* Very dark grey for chat container */
+            --accent-color: #BE00FE; /* Neon Purple */
+            --primary-text-color: #FFFFFF; /* White */
+            --secondary-text-color: #b0b0b0; /* Light grey for subdued text */
+            --user-msg-bg: #2a003f; /* Dark, saturated purple */
+            --bot-msg-bg: #222222; /* Dark grey for bot messages */
+            --border-color: #333333;
+            --font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            --border-radius: 12px;
+        }
+        body {
+            font-family: var(--font-family);
+            background-color: var(--background-color);
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            color: var(--primary-text-color);
+        }
+        .chat-container {
+            width: 100%;
+            max-width: 800px;
+            height: 95vh;
+            max-height: 900px;
+            display: flex;
+            flex-direction: column;
+            background: var(--chat-bg);
+            border-radius: var(--border-radius);
+            box-shadow: 0 0 40px rgba(190, 0, 254, 0.25); /* Neon purple glow */
+            border: 1px solid var(--border-color);
+            overflow: hidden;
+        }
+        .chat-header {
+            background: var(--accent-color);
+            color: white;
+            padding: 1rem;
+            text-align: center;
+            font-size: 1.25rem;
+            font-weight: 600;
+            border-bottom: 1px solid var(--border-color);
+            text-shadow: 0 0 5px rgba(255, 255, 255, 0.5);
+        }
+        .chat-window {
+            flex-grow: 1;
+            padding: 1.5rem;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+        }
+        .chat-message {
+            max-width: 75%;
+            padding: 0.75rem 1rem;
+            border-radius: var(--border-radius);
+            margin-bottom: 1rem;
+            position: relative;
+        }
+        .chat-message p {
+            margin: 0;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .chat-message.user {
+            background-color: var(--user-msg-bg);
+            align-self: flex-end;
+            border-bottom-right-radius: 4px;
+        }
+        .chat-message.bot {
+            background-color: var(--bot-msg-bg);
+            align-self: flex-start;
+            border-bottom-left-radius: 4px;
+        }
+        .chat-message.bot a {
+            color: var(--accent-color);
+        }
+        .chat-message.bot strong, .chat-message.bot b {
+             color: var(--accent-color);
+        }
+        .chat-message .feedback {
+            display: none; /* Hidden by default */
+            margin-top: 10px;
+            border-top: 1px solid var(--border-color);
+            padding-top: 8px;
+        }
+        .chat-message .feedback button {
+            background: none;
+            border: 1px solid var(--secondary-text-color);
+            color: var(--secondary-text-color);
+            border-radius: 50%;
+            cursor: pointer;
+            width: 28px;
+            height: 28px;
+            margin-right: 5px;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+        .chat-message .feedback button:hover {
+            background-color: var(--accent-color);
+            border-color: var(--accent-color);
+            color: white;
+        }
+        .input-area {
+            display: flex;
+            padding: 1rem;
+            border-top: 1px solid var(--border-color);
+            background: #1a1a1a;
+        }
+        #user-input {
+            flex-grow: 1;
+            border: 1px solid #444;
+            background-color: #333;
+            color: var(--primary-text-color);
+            border-radius: var(--border-radius);
+            padding: 0.75rem;
+            font-size: 1rem;
+            margin-right: 0.5rem;
+        }
+        #user-input::placeholder {
+            color: var(--secondary-text-color);
+        }
+        .action-buttons {
+            display: flex;
+            gap: 0.5rem;
+        }
+        .action-buttons button {
+            padding: 0.75rem 1rem;
+            border: none;
+            background-color: var(--accent-color);
+            color: white;
+            border-radius: var(--border-radius);
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 500;
+            transition: filter 0.2s;
+        }
+        .action-buttons button:hover {
+            filter: brightness(1.2);
+        }
+        .loader {
+            align-self: flex-start;
+            display: flex;
+            align-items: center;
+        }
+        .loader span {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--accent-color);
+            margin: 0 2px;
+            animation: bounce 1.4s infinite ease-in-out both;
+        }
+        .loader span:nth-child(1) { animation-delay: -0.32s; }
+        .loader span:nth-child(2) { animation-delay: -0.16s; }
+        @keyframes bounce {
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1.0); }
+        }
+        @media (max-width: 600px) {
+            .chat-container { height: 100vh; border-radius: 0; }
+            .action-buttons { flex-direction: column; }
+            #user-input { margin-bottom: 0.5rem; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="chat-container">
+        <div class="chat-header">CET-Mentor</div>
+        <div class="chat-window" id="chat-window">
+            <div class="chat-message bot">
+                <p>Hello! I'm CET-Mentor, your AI guide for MHT-CET admissions. How can I help you today? You can ask me a question, or use the buttons below.</p>
+            </div>
+        </div>
+        <div class="input-area">
+            <input type="text" id="user-input" placeholder="Type a message or just your rank..." onkeydown="if(event.key==='Enter') handleSend()">
+            <div class="action-buttons">
+                <button id="send-btn" onclick="handleSend()">SEND</button>
+                <button id="suggest-btn" onclick="handleSuggest()">SUGGEST</button>
+                <button id="predict-btn" onclick="handlePredict()">PREDICT</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const chatWindow = document.getElementById('chat-window');
+        const userInput = document.getElementById('user-input');
+        let messageIdCounter = 0;
+
+        function addMessage(text, sender, messageId = null) {
+            const messageElement = document.createElement('div');
+            messageElement.classList.add('chat-message', sender);
+            
+            const p = document.createElement('p');
+            // Basic markdown for bolding. Use a library for more complex needs.
+            let formattedText = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+            p.innerHTML = formattedText;
+            messageElement.appendChild(p);
+
+            if (sender === 'bot') {
+                messageElement.id = messageId || `bot-msg-${++messageIdCounter}`;
+                
+                const feedbackDiv = document.createElement('div');
+                feedbackDiv.classList.add('feedback');
+                feedbackDiv.innerHTML = `
+                    <button onclick="handleFeedback('good', '${messageElement.id}')">👍</button>
+                    <button onclick="handleFeedback('bad', '${messageElement.id}')">👎</button>
+                `;
+                messageElement.appendChild(feedbackDiv);
+            }
+
+            chatWindow.appendChild(messageElement);
+            chatWindow.scrollTop = chatWindow.scrollHeight;
+            return messageElement;
+        }
+        
+        function showLoader() {
+            const loaderElement = document.createElement('div');
+            loaderElement.classList.add('chat-message', 'bot', 'loader');
+            loaderElement.id = 'loader';
+            loaderElement.innerHTML = '<span></span><span></span><span></span>';
+            chatWindow.appendChild(loaderElement);
+            chatWindow.scrollTop = chatWindow.scrollHeight;
+        }
+        
+        function removeLoader() {
+            const loader = document.getElementById('loader');
+            if (loader) loader.remove();
+        }
+
+        async function streamResponse(endpoint, payload) {
+            showLoader();
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            removeLoader();
+            
+            const botMessageElement = addMessage("", "bot");
+            const pElement = botMessageElement.querySelector('p');
+            
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            
+            let buffer = '';
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop(); // Keep the last, possibly incomplete line
+
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        const data = line.substring(6).trim();
+                        if (data === '[DONE]') {
+                            // Show feedback buttons when streaming is complete
+                            botMessageElement.querySelector('.feedback').style.display = 'block';
+                            return;
+                        }
+                        try {
+                            let content = JSON.parse(data);
+                            // Basic markdown for bolding
+                            content = content.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+                            pElement.innerHTML += content.replace(/\n/g, '<br>');
+                        } catch(e) {
+                             let content = data;
+                             content = content.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+                             pElement.innerHTML += content.replace(/\n/g, '<br>');
+                        }
+                        chatWindow.scrollTop = chatWindow.scrollHeight;
+                    }
+                }
+            }
+             botMessageElement.querySelector('.feedback').style.display = 'block';
+        }
+
+        function handleSend() {
+            const messageText = userInput.value.trim();
+            if (!messageText) return;
+
+            addMessage(messageText, 'user');
+            
+            // Smart Intent Recognition
+            if (/^\d{1,6}$/.test(messageText)) {
+                // If the user types only a number (rank), trigger suggest
+                streamResponse('/suggest', { rank: messageText });
+            } else {
+                // Otherwise, trigger general chat
+                streamResponse('/chat', { message: messageText });
+            }
+
+            userInput.value = '';
+        }
+
+        function handleSuggest() {
+            const rank = prompt("Please enter your MHT-CET Rank:");
+            if (rank && /^\d+$/.test(rank)) {
+                addMessage(`Suggest colleges for rank ${rank}`, 'user');
+                streamResponse('/suggest', { rank: rank });
+            } else if (rank) {
+                alert("Please enter a valid number for the rank.");
+            }
+        }
+
+        function handlePredict() {
+            const percentile = prompt("Please enter your MHT-CET Percentile:");
+            if (!percentile || isNaN(parseFloat(percentile))) {
+                if (percentile) alert("Please enter a valid percentile.");
+                return;
+            }
+            const college = prompt("Please enter the name of the college you are interested in:");
+            if (college) {
+                addMessage(`Predict my chances for "${college}" with ${percentile} percentile.`, 'user');
+                streamResponse('/predict', { percentile: parseFloat(percentile), college: college });
+            }
+        }
+        
+        async function handleFeedback(feedbackType, messageId) {
+            const botMessageElement = document.getElementById(messageId);
+            const responseText = botMessageElement.querySelector('p').innerText;
+            
+            // Find the preceding user message to get the query
+            let prevSibling = botMessageElement.previousElementSibling;
+            let queryText = 'N/A';
+            while(prevSibling) {
+                if(prevSibling.classList.contains('user')) {
+                    queryText = prevSibling.querySelector('p').innerText;
+                    break;
+                }
+                prevSibling = prevSibling.previousElementSibling;
+            }
+
+            let correction = "";
+            if (feedbackType === 'bad') {
+                correction = prompt("Sorry about that! What was the correct answer?");
+            }
+
+            try {
+                await fetch('/feedback', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        query: queryText, 
+                        response: responseText, 
+                        feedback_type: feedbackType, 
+                        correction: correction || ""
+                    }),
+                });
+                alert('Thank you for your feedback!');
+                // Visually disable feedback buttons
+                const buttons = botMessageElement.querySelectorAll('.feedback button');
+                buttons.forEach(b => b.disabled = true);
+
+            } catch(e) {
+                console.error("Failed to submit feedback:", e);
+                alert("Could not submit feedback at this time.");
+            }
+        }
+
+    </script>
+</body>
+</html>
