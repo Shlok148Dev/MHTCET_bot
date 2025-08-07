@@ -1,21 +1,11 @@
 # requirements.txt
 
-# Core web framework and session management
-flask
-flask-session
-
-# AI Model Integration
-openai
-
-# Data handling and manipulation
-pandas
-
-# Web scraping
+Flask
+Flask-Session
 requests
 beautifulsoup4
-
-# For reading environment variables (optional but good practice)
+pandas
+openai
 python-dotenv
-
-# A production-grade WSGI server (recommended for deployment)
 gunicorn
+tqdm
