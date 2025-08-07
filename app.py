@@ -1,655 +1,296 @@
 
 
-from flask import Flask, render_template_string, request, jsonify, session, Response
+import os
 import json
 import pandas as pd
 import openai
-import os
-import logging
-from datetime importdatetime
 import csv
-from typing import List, Dict, Any
-from dotenv import load_dotenv
-
-# --- Basic Configuration ---
-load_dotenv() # Load environment variables from .env file
-
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
-# --- Flask App Initialization ---
-app = Flask(__name__)
-# IMPORTANT: Change this secret key for production environments!
-app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key-change-me")
-app.config["SESSION_PERMANENT"] = False
-app.config["SESSION_TYPE"] = "filesystem" # Server-side sessions
-
+import logging
+from flask import Flask, Response, request, jsonify, render_template_string
 from flask_session import Session
+from dotenv import load_dotenv
+from datetime import datetime
+
+# --- Configuration ---
+load_dotenv()
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# --- App Initialization ---
+app = Flask(__name__)
+app.config["SECRET_KEY"] = os.getenv("FLASK_SECRET_KEY", "a-strong-default-secret-key")
+app.config["SESSION_TYPE"] = "filesystem"
 Session(app)
 
-
-# --- OpenAI Client Configuration (using OpenRouter) ---
-# It's highly recommended to set your API key as an environment variable
-api_key = os.environ.get("OPENROUTER_API_KEY")
-if not api_key:
-    # Fallback to a placeholder if the key is not found in environment variables
-    api_key = "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" # PASTE YOUR KEY HERE
-    logger.warning("OPENROUTER_API_KEY not found in environment. Using placeholder key.")
-
-# This is the modern (v1.x) way to initialize the OpenAI client
+# --- OpenAI Client ---
 try:
     client = openai.OpenAI(
         base_url="https://openrouter.ai/api/v1",
-        api_key=api_key,
+        api_key=os.getenv("OPENROUTER_API_KEY")
     )
-except openai.OpenAIError as e:
-    logger.critical(f"Failed to initialize OpenAI client: {e}")
+except TypeError:
+    logging.critical("OPENROUTER_API_KEY not found. Please set it in your .env file.")
     client = None
 
-# Global data storage, managed by the assistant class
-df_colleges = pd.DataFrame()
+# --- Data Loading ---
+try:
+    df = pd.read_json("mht_cet_data.json")
+    logging.info(f"Successfully loaded {len(df)} records from mht_cet_data.json")
+except FileNotFoundError:
+    logging.error("mht_cet_data.json not found. Please run scraper.py first.")
+    df = pd.DataFrame(columns=['college', 'branch', 'closing_rank'])
 
-class MHTCETAssistant:
+# --- Core Logic ---
+def get_system_prompt():
+    return """You are 'CET-Mentor', an expert AI assistant for MHT-CET engineering admissions. Your primary function is to provide accurate, data-driven advice based on student ranks.
+
+    **Core Directives:**
+    1.  **Prioritize VERIFIED CONTEXT:** If context with college data is provided, you MUST use it as the source of truth. All your claims about cutoffs must come from this data.
+    2.  **Rank-Based Advice:** All advice must be centered around MHT-CET **ranks**. A lower rank is better. Explain this concept if necessary.
+    3.  **Strict Scope:** Do not discuss IITs, NITs, JEE, or other exam systems. Politely decline and refocus the conversation on MHT-CET colleges.
+    4.  **Professional Tone:** Be encouraging, realistic, and clear. Use markdown for readability.
     """
-    Encapsulates all the logic for the MHT-CET chatbot.
-    """
-    def __init__(self):
-        self.df_colleges = pd.DataFrame()
-        self.load_data()
-        self.system_prompt = self.build_system_prompt()
 
-    def load_data(self):
-        """Load MHT-CET data from JSON file into a pandas DataFrame."""
-        try:
-            with open('mht_cet_data.json', 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            
-            # Standardize column names during loading
-            # This ensures consistency with the scraper's output
-            self.df_colleges = pd.DataFrame(data)
-            self.df_colleges.rename(columns={
-                'college_name': 'college',
-                'branch_name': 'branch',
-                'closing_percentile': 'cutoff_percentile'
-            }, inplace=True, errors='ignore')
-            
-            # Ensure percentile is a numeric type for calculations
-            if 'cutoff_percentile' in self.df_colleges.columns:
-                self.df_colleges['cutoff_percentile'] = pd.to_numeric(self.df_colleges['cutoff_percentile'])
+# --- Flask Routes ---
+@app.route('/')
+def index():
+    # Renders the frontend from a string variable
+    return render_template_string(INDEX_HTML)
 
-            logger.info(f"Successfully loaded {len(self.df_colleges)} college records.")
-            return True
-        
-        except FileNotFoundError:
-            logger.error("'mht_cet_data.json' not found! Please run scraper.py first.")
-            return False
-        except Exception as e:
-            logger.error(f"An error occurred while loading data: {e}")
-            return False
+@app.route('/suggest', methods=['POST'])
+def suggest_colleges_route():
+    user_rank = request.json.get('rank')
+    if not user_rank or not isinstance(user_rank, int) or user_rank <= 0:
+        return jsonify({"error": "Please provide a valid rank."}), 400
 
-    def build_system_prompt(self):
-        """Builds the master system prompt for the AI assistant."""
-        current_year = datetime.now().year
-        return f"""You are 'CET-Mentor', an expert AI assistant specializing in MHT-CET admissions for Maharashtra engineering colleges. The current year is {current_year}. All your advice should be relevant for the upcoming admissions.
+    if df.empty:
+        return jsonify({"error": "College data not available. Please run the scraper."}), 500
 
-**CORE DIRECTIVES:**
-1.  **Truth Source:** You MUST prioritize the "VERIFIED CONTEXT" provided in this prompt. This data is the absolute source of truth. If it contradicts your general knowledge, you MUST state the verified data as correct and explain that it's based on provided records.
-2.  **Data-Driven:** Always provide quantitative answers (ranks, percentiles) when available in the context. Be precise.
-3.  **Scope Limitation:** Strictly confine your discussion to MHT-CET system colleges. Politely refuse to discuss IITs, NITs, BITS, JEE, or any other exam system.
-4.  **Tone:** Your tone should be professional, encouraging, and supportive, yet realistic. Use clear language and avoid jargon.
-5.  **Formatting:** Use markdown (especially bullet points and bold text) to structure your responses for clarity.
-6.  **No Context Fallback:** If no VERIFIED CONTEXT is provided, you may use your general knowledge about the MHT-CET process but must explicitly state that the information is general and not based on specific data for the user's query.
-"""
+    # A lower rank is better. Find colleges with a closing rank higher than the user's.
+    safe_options = df[df['closing_rank'] >= user_rank].sort_values(by='closing_rank', ascending=True).head(7)
+    # Ambitious options are those with a closing rank slightly lower (better) than the user's.
+    ambitious_options = df[(df['closing_rank'] < user_rank) & (df['closing_rank'] >= user_rank - 5000)].sort_values(by='closing_rank', ascending=False).head(7)
 
-    def search_relevant_data(self, query: str, limit: int = 5) -> List[Dict]:
-        """Performs a keyword search on the dataframe to find relevant context."""
-        if self.df_colleges.empty:
-            return []
-        
-        keywords = [word for word in re.split(r'\s|,|\(|\)', query.lower()) if len(word) > 3]
-        if not keywords:
-            return []
-            
-        # Create a boolean mask for rows that match any keyword in either college or branch
-        college_mask = self.df_colleges['college'].str.lower().apply(lambda x: any(key in x for key in keywords))
-        branch_mask = self.df_colleges['branch'].str.lower().apply(lambda x: any(key in x for key in keywords))
-        
-        combined_mask = college_mask | branch_mask
-        
-        # Get the top N matches, sorted by percentile
-        relevant_df = self.df_colleges[combined_mask].sort_values(by='cutoff_percentile', ascending=False).head(limit)
-        
-        return relevant_df.to_dict('records')
+    return jsonify({
+        "safe_options": safe_options.to_dict('records'),
+        "ambitious_options": ambitious_options.to_dict('records')
+    })
 
-    def rank_to_percentile(self, rank: int, total_candidates: int = 350000) -> float:
-        """
-        Converts MHT-CET rank to an approximate percentile.
-        Note: total_candidates is an estimate for the PCM group and varies each year.
-        """
-        if rank <= 0: return 100.0
-        percentile = (1 - (rank / total_candidates)) * 100
-        return round(max(0, min(100, percentile)), 4)
+@app.route('/chat', methods=['POST'])
+def chat_route():
+    if not client:
+        return Response("AI client not configured.", status=503)
 
-    def predict_admission_chance(self, user_percentile: float, cutoff_percentile: float) -> str:
-        """Categorizes admission chance based on the percentile difference."""
-        difference = user_percentile - cutoff_percentile
-        
-        if difference >= 2: return "Very High"
-        if difference >= 0.5: return "High"
-        if difference >= -0.75: return "Medium (Borderline)"
-        if difference >= -2.5: return "Low"
-        return "Unlikely"
+    user_message = request.json.get('message')
+    if not user_message:
+        return Response("Empty message.", status=400)
 
-    def suggest_colleges(self, user_rank: int, category: str = "General", limit: int = 7) -> Dict[str, Any]:
-        """Suggests best-fit colleges based on user rank with 'Safe' and 'Ambitious' categories."""
-        if self.df_colleges.empty:
-            return {"safe": [], "ambitious": [], "user_percentile": 0}
-            
-        user_percentile = self.rank_to_percentile(user_rank)
-        
-        # For simplicity in this version, we will filter by General category if the specific one is not found.
-        # A more advanced version would handle category-specific cutoffs.
-        df_filtered = self.df_colleges[self.df_colleges['category'].str.upper() == "GENERAL"].copy()
-        
-        if df_filtered.empty:
-            return {"safe": [], "ambitious": [], "user_percentile": user_percentile}
+    # RAG: Retrieval Step
+    context_df = df[df['college'].str.contains(user_message, case=False, na=False)]
+    context_str = ""
+    if not context_df.empty:
+        context_str = "### VERIFIED CONTEXT\n"
+        for _, row in context_df.head(5).iterrows():
+            context_str += f"- College: {row['college']}, Branch: {row['branch']}, Closing Rank: {row['closing_rank']}\n"
 
-        # Safe options: Cutoff is lower than the user's percentile
-        safe_df = df_filtered[df_filtered['cutoff_percentile'] <= user_percentile]
-        safe_suggestions = safe_df.sort_values(by='cutoff_percentile', ascending=False).head(limit)
-        
-        # Ambitious options: Cutoff is slightly higher than the user's percentile
-        ambitious_df = df_filtered[df_filtered['cutoff_percentile'] > user_percentile]
-        ambitious_suggestions = ambitious_df.sort_values(by='cutoff_percentile', ascending=True).head(limit)
-        
-        return {
-            "safe": safe_suggestions.to_dict('records'),
-            "ambitious": ambitious_suggestions.to_dict('records'),
-            "user_percentile": user_percentile
-        }
-
-    def generate_response_stream(self, user_message: str, context_data: List[Dict] = None):
-        """Generates a streaming AI response using the modern OpenAI client."""
-        if not client:
-            yield "data: {\"error\": \"AI client not initialized. Check API key.\"}\n\n"
-            return
-
-        messages = [{"role": "system", "content": self.system_prompt}]
-        
-        if context_data:
-            context_text = "VERIFIED CONTEXT (Use this as the primary source of truth):\n"
-            for item in context_data:
-                context_text += f"- College: {item['college']} | Branch: {item['branch']} | Cutoff: {item['cutoff_percentile']:.4f}% | Category: {item['category']}\n"
-            messages.append({"role": "system", "content": context_text})
-        
-        messages.append({"role": "user", "content": user_message})
-        
+    # RAG: Generation Step
+    def generate():
+        messages = [
+            {"role": "system", "content": get_system_prompt()},
+            {"role": "system", "content": context_str} if context_str else {"role": "system", "content": "No specific context found."},
+            {"role": "user", "content": user_message}
+        ]
         try:
             stream = client.chat.completions.create(
                 model="anthropic/claude-3.5-sonnet",
                 messages=messages,
-                max_tokens=700,
-                temperature=0.5,
                 stream=True
             )
             for chunk in stream:
                 content = chunk.choices[0].delta.content
                 if content:
-                    # SSE format: data: {...}\n\n
                     yield f"data: {json.dumps({'content': content})}\n\n"
         except Exception as e:
-            logger.error(f"OpenAI API call failed: {e}")
-            yield f"data: {json.dumps({'error': 'Sorry, I am having trouble connecting to my brain right now. Please try again later.'})}\n\n"
+            logging.error(f"OpenAI Stream Error: {e}")
+            yield f"data: {json.dumps({'error': 'The AI service is currently unavailable.'})}\n\n"
 
-# --- Global Assistant Instance ---
-assistant = MHTCETAssistant()
+    return Response(generate(), mimetype='text/event-stream')
 
-# --- Flask Routes ---
-
-@app.route('/')
-def index():
-    """Serves the main chat interface from the INDEX_HTML string."""
-    return render_template_string(INDEX_HTML)
-
-@app.route('/suggest', methods=['POST'])
-def handle_suggest():
-    """API endpoint to get college suggestions."""
-    data = request.json
-    try:
-        rank = int(data.get('rank', 0))
-        if rank <= 0:
-            return jsonify({'success': False, 'error': 'Please provide a valid rank.'}), 400
-            
-        suggestions = assistant.suggest_colleges(user_rank=rank)
-        
-        session['last_suggestion'] = suggestions # Store for conversational context
-        
-        return jsonify({
-            'success': True,
-            'rank': rank,
-            'percentile': suggestions['user_percentile'],
-            'suggestions': suggestions
-        })
-    except (ValueError, TypeError):
-        return jsonify({'success': False, 'error': 'Invalid rank format. Please enter a number.'}), 400
-    except Exception as e:
-        logger.error(f"Error in /suggest endpoint: {e}")
-        return jsonify({'success': False, 'error': 'An internal error occurred.'}), 500
-
-@app.route('/predict', methods=['POST'])
-def handle_predict():
-    """API endpoint to predict admission chances."""
-    data = request.json
-    try:
-        percentile = float(data.get('percentile', 0))
-        college_query = data.get('college', '').strip()
-        
-        if not college_query or percentile <= 0:
-            return jsonify({'success': False, 'error': 'Please provide a valid percentile and college name.'}), 400
-
-        # Find the best match for the college query
-        match = assistant.df_colleges[assistant.df_colleges['college'].str.contains(college_query, case=False, na=False)]
-        
-        if match.empty:
-            return jsonify({'success': False, 'error': f"Could not find any college matching '{college_query}' in the database."})
-        
-        # For this version, we take the highest cutoff for the matched college
-        cutoff_data = match.sort_values(by='cutoff_percentile', ascending=False).iloc[0]
-        
-        admission_chance = assistant.predict_admission_chance(percentile, cutoff_data['cutoff_percentile'])
-        
-        return jsonify({
-            'success': True,
-            'user_percentile': percentile,
-            'college': cutoff_data['college'],
-            'branch': cutoff_data['branch'],
-            'cutoff_percentile': cutoff_data['cutoff_percentile'],
-            'admission_chance': admission_chance
-        })
-    except (ValueError, TypeError):
-        return jsonify({'success': False, 'error': 'Invalid percentile. Please enter a number.'}), 400
-    except Exception as e:
-        logger.error(f"Error in /predict endpoint: {e}")
-        return jsonify({'success': False, 'error': 'An internal error occurred.'}), 500
-
-
-@app.route('/chat', methods=['POST'])
-def handle_chat():
-    """API endpoint to handle general chat messages with RAG."""
-    data = request.json
-    user_message = data.get('message', '').strip()
-    if not user_message:
-        return Response(status=400) # Bad request for empty message
-        
-    context_data = assistant.search_relevant_data(user_message)
-    
-    # SSE response
-    return Response(assistant.generate_response_stream(user_message, context_data), mimetype='text/event-stream')
 
 @app.route('/feedback', methods=['POST'])
-def handle_feedback():
-    """API endpoint to log user feedback."""
+def feedback_route():
+    data = request.json
     try:
-        data = request.json
-        feedback_file = 'feedback_log.csv'
-        file_exists = os.path.isfile(feedback_file)
-        
-        with open(feedback_file, 'a', newline='', encoding='utf-8') as f:
-            fieldnames = ['timestamp', 'type', 'user_message', 'bot_response', 'correction']
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            
-            if not file_exists:
-                writer.writeheader()
-            
-            writer.writerow({
-                'timestamp': datetime.now().isoformat(),
-                'type': data.get('type'),
-                'user_message': data.get('message'),
-                'bot_response': data.get('response'),
-                'correction': data.get('correction', '')
-            })
-        
-        logger.info(f"Logged {data.get('type')} feedback.")
-        return jsonify({'success': True})
+        with open('feedback_log.csv', 'a', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                datetime.now().isoformat(),
+                data.get('type'),
+                data.get('message'),
+                data.get('response')
+            ])
+        return jsonify({"status": "success"}), 200
     except Exception as e:
-        logger.error(f"Error logging feedback: {e}")
-        return jsonify({'success': False, 'error': 'Failed to log feedback'}), 500
+        logging.error(f"Feedback logging failed: {e}")
+        return jsonify({"status": "error"}), 500
 
-# --- Frontend HTML/CSS/JS ---
-# This contains the complete, functional frontend for the chatbot.
-INDEX_HTML = """
-<!DOCTYPE html>
+# HTML Template embedded in the app
+INDEX_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CET-Mentor - MHT-CET Admissions Assistant</title>
+    <title>CET-Mentor v2.0</title>
+    <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #eef2f3;
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
-        }
-        .container {
-            background: white;
-            border-radius: 16px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
-            width: 100%;
-            max-width: 800px;
-            height: 90vh;
-            max-height: 700px;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-        }
-        .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 16px;
-            text-align: center;
-            flex-shrink: 0;
-        }
-        .header h1 { font-size: 22px; margin-bottom: 4px; }
-        .header p { opacity: 0.9; font-size: 14px; }
-        .messages {
-            flex-grow: 1;
-            padding: 20px;
-            overflow-y: auto;
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
-        .message { padding: 10px 15px; border-radius: 18px; max-width: 80%; line-height: 1.5; }
-        .message.user {
-            background: #007bff;
-            color: white;
-            align-self: flex-end;
-            border-bottom-right-radius: 4px;
-        }
-        .message.bot {
-            background: #f1f0f0;
-            color: #333;
-            align-self: flex-start;
-            border-bottom-left-radius: 4px;
-        }
-        .message.bot strong { color: #667eea; }
-        .message.bot ul { padding-left: 20px; margin-top: 8px; }
-        .message.bot li { margin-bottom: 4px; }
-        .message.bot .feedback-buttons { margin-top: 10px; border-top: 1px solid #ddd; padding-top: 8px; display: none;}
-        .message.bot .feedback-btn { background: none; border: 1px solid #ccc; font-size: 16px; cursor: pointer; margin-right: 5px; padding: 2px 6px; border-radius: 12px; transition: all 0.2s; }
-        .message.bot .feedback-btn:hover { background: #ddd; }
-        .message.bot .feedback-btn:disabled { cursor: default; opacity: 0.5; }
-        .input-area { padding: 15px; background: #fff; border-top: 1px solid #e9ecef; flex-shrink: 0; }
-        .input-row { display: flex; gap: 10px; margin-bottom: 10px; }
-        #message-input {
-            flex: 1;
-            padding: 12px;
-            border: 1px solid #ddd;
-            border-radius: 25px;
-            outline: none;
-            font-size: 14px;
-            transition: border-color 0.2s;
-        }
-        #message-input:focus { border-color: #667eea; }
-        #send-btn {
-             padding: 10px 20px; border: none; border-radius: 20px; cursor: pointer; font-weight: bold; transition: all 0.3s;
-             background: #007bff; color: white; font-size: 14px;
-        }
-        #send-btn:hover { background: #0056b3; }
-        .button-row { display: flex; gap: 10px; justify-content: center; }
-        .action-btn {
-            padding: 10px 20px; border: 1px solid #667eea; border-radius: 20px; cursor: pointer; font-weight: 500;
-            transition: all 0.3s; color: #667eea; background: white; font-size: 14px;
-        }
-        .action-btn:hover { background: #667eea; color: white; }
-        .typing-indicator { align-self: flex-start; }
-        .typing-indicator span { display: inline-block; width: 8px; height: 8px; margin: 0 1px; background-color: #888; border-radius: 50%; animation: bounce 1.4s infinite ease-in-out both; }
-        .typing-indicator span:nth-child(1) { animation-delay: -0.32s; }
-        .typing-indicator span:nth-child(2) { animation-delay: -0.16s; }
-        @keyframes bounce { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1); } }
+        /* Simple scrollbar styling for a better dark mode experience */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #1f2937; }
+        ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #6b7280; }
     </style>
 </head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>CET-Mentor</h1>
-            <p>Your Personal MHT-CET Admissions Assistant</p>
+<body class="bg-gray-900 text-gray-200 font-sans flex items-center justify-center h-screen">
+    <div class="w-full max-w-3xl h-[90vh] bg-gray-800 rounded-2xl shadow-2xl flex flex-col">
+        <div class="p-4 border-b border-gray-700 text-center bg-gray-900 rounded-t-2xl">
+            <h1 class="text-xl font-bold text-white">CET-Mentor 2.0</h1>
+            <p class="text-sm text-purple-400">Your AI-Powered MHT-CET Admissions Assistant</p>
         </div>
-        <div class="messages" id="messages-container">
-            <div class="message bot">Hello! How can I assist you with your MHT-CET admissions today? You can ask a question or use one of the buttons below.</div>
-        </div>
-        <div class="input-area">
-            <div class="input-row">
-                <input type="text" id="message-input" placeholder="Type your rank for suggestions, or ask a question...">
-                <button id="send-btn">Send</button>
+
+        <div id="messages-container" class="flex-1 p-6 space-y-4 overflow-y-auto">
+            <div class="flex justify-start">
+                <div class="bg-gray-700 rounded-lg p-3 max-w-lg">
+                    <p>Hello! I'm CET-Mentor. Provide your MHT-CET rank for suggestions, or ask me any question about the admissions process.</p>
+                </div>
             </div>
-            <div class="button-row">
-                <button class="action-btn" id="suggest-btn">Suggest Colleges</button>
-                <button class="action-btn" id="predict-btn">Predict Admission Chance</button>
+        </div>
+
+        <div class="p-4 border-t border-gray-700 bg-gray-900 rounded-b-2xl">
+            <div class="flex items-center space-x-2">
+                <input type="text" id="message-input" placeholder="Enter your rank or ask a question..." class="flex-1 bg-gray-700 border border-gray-600 rounded-full py-2 px-4 text-white focus:outline-none focus:ring-2 focus:ring-purple-500 transition">
+                <button id="send-btn" class="bg-purple-600 text-white font-bold py-2 px-5 rounded-full hover:bg-purple-700 transition-colors focus:outline-none focus:ring-2 focus:ring-purple-500">Send</button>
             </div>
         </div>
     </div>
-    <script>
-        const messagesContainer = document.getElementById('messages-container');
-        const messageInput = document.getElementById('message-input');
-        const sendBtn = document.getElementById('send-btn');
-        const suggestBtn = document.getElementById('suggest-btn');
-        const predictBtn = document.getElementById('predict-btn');
-        let messageCounter = 0;
 
-        const addMessage = (text, type, id=null) => {
-            const msgDiv = document.createElement('div');
-            msgDiv.className = `message ${type}`;
-            msgDiv.innerHTML = text; // Use innerHTML to render markdown from AI
-            if (id) msgDiv.id = id;
-            messagesContainer.appendChild(msgDiv);
-            messagesContainer.scrollTop = messagesContainer.scrollHeight;
-            return msgDiv;
-        };
+<script>
+    const messagesContainer = document.getElementById('messages-container');
+    const messageInput = document.getElementById('message-input');
+    const sendBtn = document.getElementById('send-btn');
+    let messageCounter = 0;
+
+    const addMessage = (html, type) => {
+        const wrapper = document.createElement('div');
+        wrapper.className = `flex ${type === 'user' ? 'justify-end' : 'justify-start'}`;
         
-        const addTypingIndicator = () => {
-            const indicator = document.createElement('div');
-            indicator.className = 'message bot typing-indicator';
-            indicator.id = 'typing-indicator';
-            indicator.innerHTML = '<span></span><span></span><span></span>';
-            messagesContainer.appendChild(indicator);
-            messagesContainer.scrollTop = messagesContainer.scrollHeight;
-        };
-
-        const removeTypingIndicator = () => {
-            const indicator = document.getElementById('typing-indicator');
-            if(indicator) indicator.remove();
-        };
+        const bubble = document.createElement('div');
+        bubble.className = `rounded-lg p-3 max-w-lg ${type === 'user' ? 'bg-purple-600 text-white' : 'bg-gray-700'}`;
+        bubble.innerHTML = html; // Allows for HTML content like lists and bolding
         
-        const handleSend = async () => {
-            const userText = messageInput.value.trim();
-            if (!userText) return;
-            addMessage(userText, 'user');
-            messageInput.value = '';
+        wrapper.appendChild(bubble);
+        messagesContainer.appendChild(wrapper);
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        return bubble;
+    };
 
-            // Smart Intent: If user types only a number, treat it as a rank for suggestion
-            if (/^\\d{1,6}$/.test(userText)) {
-                await fetchSuggestions(userText);
-            } else {
-                await fetchChatResponse(userText);
-            }
-        };
-
-        const fetchChatResponse = async (message) => {
-            addTypingIndicator();
-            const botMsgId = `bot-msg-${++messageCounter}`;
-            let botMsgDiv = null;
-            let fullResponseText = "";
-            try {
-                const response = await fetch('/chat', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({message: message})
-                });
-                
-                removeTypingIndicator();
-                botMsgDiv = addMessage("", 'bot', botMsgId);
-
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                while(true) {
-                    const {value, done} = await reader.read();
-                    if(done) break;
-                    const chunk = decoder.decode(value);
-                    const lines = chunk.split('\\n');
-                    lines.forEach(line => {
-                        if (line.startsWith('data: ')) {
-                            try {
-                                const jsonData = JSON.parse(line.substring(6));
-                                if(jsonData.content) {
-                                    fullResponseText += jsonData.content;
-                                    // Basic markdown rendering
-                                    let formattedContent = fullResponseText.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>').replace(/\\n/g, '<br>');
-                                    botMsgDiv.innerHTML = formattedContent;
-                                }
-                                if(jsonData.error) {
-                                    botMsgDiv.innerHTML = `<p style="color:red;">Error: ${jsonData.error}</p>`;
-                                }
-                            } catch(e) {/* Incomplete JSON, wait for next chunk */}
-                        }
-                    });
-                    messagesContainer.scrollTop = messagesContainer.scrollHeight;
-                }
-            } catch (e) {
-                removeTypingIndicator();
-                if(!botMsgDiv) botMsgDiv = addMessage("", 'bot', botMsgId);
-                botMsgDiv.innerHTML = "Sorry, something went wrong. Could not connect to the server.";
-            } finally {
-                if(botMsgDiv) addFeedbackButtons(botMsgDiv, message, fullResponseText);
-            }
-        };
-
-        const fetchSuggestions = async (rank) => {
-            addTypingIndicator();
-            try {
-                const response = await fetch('/suggest', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({rank: rank})
-                });
-                const data = await response.json();
-                removeTypingIndicator();
-
-                if (data.success) {
-                    let html = `Based on your rank of <strong>${data.rank}</strong> (approx. ${data.percentile.toFixed(4)} percentile), here are some suggestions:<br><br>`;
-                    if(data.suggestions.safe && data.suggestions.safe.length > 0) {
-                        html += '<strong>🎯 Good Possibilities (Cutoff ≤ Your Percentile):</strong><ul>';
-                        data.suggestions.safe.forEach(s => {
-                            html += `<li><strong>${s.college}</strong><br>(${s.branch}) - Cutoff: ${s.cutoff_percentile}%</li>`;
-                        });
-                        html += '</ul><br>';
-                    }
-                    if(data.suggestions.ambitious && data.suggestions.ambitious.length > 0) {
-                         html += '<strong> ambitious Goals (Cutoff > Your Percentile):</strong><ul>';
-                        data.suggestions.ambitious.forEach(s => {
-                            html += `<li><strong>${s.college}</strong><br>(${s.branch}) - Cutoff: ${s.cutoff_percentile}%</li>`;
-                        });
-                        html += '</ul>';
-                    }
-                    if (data.suggestions.safe.length === 0 && data.suggestions.ambitious.length === 0) {
-                        html += "I couldn't find specific suggestions in the database for your rank. This could be because your rank is very high, or the data doesn't cover this range.";
-                    }
-                    addMessage(html, 'bot');
-                } else {
-                    addMessage(`Error: ${data.error}`, 'bot');
-                }
-            } catch (e) {
-                removeTypingIndicator();
-                addMessage('Could not fetch suggestions. Please check your connection.', 'bot');
-            }
-        };
+    const handleSend = async () => {
+        const userText = messageInput.value.trim();
+        if (!userText) return;
         
-        const addFeedbackButtons = (msgDiv, userMessage, botResponse) => {
-            const feedbackDiv = document.createElement('div');
-            feedbackDiv.className = 'feedback-buttons';
-            feedbackDiv.innerHTML = `<button class="feedback-btn" data-type="positive">👍</button><button class="feedback-btn" data-type="negative">👎</button>`;
-            msgDiv.appendChild(feedbackDiv);
-            feedbackDiv.style.display = 'block';
+        addMessage(userText, 'user');
+        const userMessageForApi = userText; // Keep a copy before clearing
+        messageInput.value = '';
 
-            feedbackDiv.querySelectorAll('.feedback-btn').forEach(btn => {
-                btn.addEventListener('click', async (e) => {
-                    const type = e.target.getAttribute('data-type');
-                    let correction = "";
-                    if (type === 'negative') {
-                        correction = prompt("Sorry about that! What should the correct answer have been?");
-                    }
-                    
-                    await fetch('/feedback', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({type, message: userMessage, response: botResponse, correction})
-                    });
-                    
-                    feedbackDiv.innerHTML = "<em>Thanks for your feedback!</em>";
-                });
+        // Smart Intent Recognition
+        if (/^\\d{1,7}$/.test(userMessageForApi)) {
+            await fetchSuggestions(parseInt(userMessageForApi));
+        } else {
+            await fetchChatResponse(userMessageForApi);
+        }
+    };
+
+    const fetchSuggestions = async (rank) => {
+        const thinkingBubble = addMessage('<span class="italic">Finding college suggestions...</span>', 'bot');
+        try {
+            const response = await fetch('/suggest', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ rank })
             });
-        };
-        
-        sendBtn.addEventListener('click', handleSend);
-        messageInput.addEventListener('keydown', (e) => { if(e.key === 'Enter') handleSend(); });
-        
-        suggestBtn.addEventListener('click', () => {
-            const rank = prompt("Please enter your MHT-CET Rank:");
-            if(rank && /^\\d+$/.test(rank)) {
-                addMessage(`Suggest colleges for rank ${rank}`, 'user');
-                fetchSuggestions(rank);
-            } else if (rank) {
-                alert("Please enter a valid number for the rank.");
-            }
-        });
+            const data = await response.json();
 
-        predictBtn.addEventListener('click', async () => {
-            const percentile = prompt("Please enter your MHT-CET Percentile:");
-            if (!percentile || isNaN(parseFloat(percentile))) {
-                if (percentile) alert("Please enter a valid percentile.");
+            if (data.error) {
+                thinkingBubble.innerHTML = `<p class="text-red-400">${data.error}</p>`;
                 return;
             }
-            const college = prompt("Please enter the college name you're interested in:");
-            if(college) {
-                addMessage(`Predict my admission chance for ${college} with ${percentile}%`, 'user');
-                addTypingIndicator();
-                 try {
-                    const response = await fetch('/predict', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({percentile: percentile, college: college})
-                    });
-                    const data = await response.json();
-                    removeTypingIndicator();
-                    let html = "";
-                    if (data.success) {
-                        html = `For <strong>${data.college}</strong> (${data.branch}), with a previous year cutoff of <strong>${data.cutoff_percentile}%</strong>:<br><br>Your admission chance is: <strong>${data.admission_chance}</strong>`;
-                    } else {
-                        html = `Error: ${data.error}`;
-                    }
-                    addMessage(html, 'bot');
-                } catch(e) {
-                     removeTypingIndicator();
-                     addMessage('Could not fetch prediction. Please check your connection.', 'bot');
-                }
+            
+            let html = `For a rank of <strong>${rank}</strong>, here are some options based on past data:<br><br>`;
+            if (data.safe_options.length > 0) {
+                html += '<strong class="text-green-400">Good Possibilities (Cutoff Rank > Your Rank):</strong><ul class="list-disc list-inside mt-1">';
+                data.safe_options.forEach(c => { html += `<li>${c.college} (Closing Rank: ${c.closing_rank})</li>`; });
+                html += '</ul>';
             }
-        });
+            if (data.ambitious_options.length > 0) {
+                html += '<br><strong class="text-yellow-400">Ambitious Goals (Cutoff Rank < Your Rank):</strong><ul class="list-disc list-inside mt-1">';
+                data.ambitious_options.forEach(c => { html += `<li>${c.college} (Closing Rank: ${c.closing_rank})</li>`; });
+                html += '</ul>';
+            }
+            if(data.safe_options.length === 0 && data.ambitious_options.length === 0){
+                html += "No specific suggestions found for this rank in the current dataset."
+            }
+            thinkingBubble.innerHTML = html;
 
-    </script>
+        } catch (e) {
+            thinkingBubble.innerHTML = '<p class="text-red-400">An error occurred while fetching suggestions.</p>';
+        }
+    };
+
+    const fetchChatResponse = async (message) => {
+        const botBubble = addMessage('<span class="italic opacity-75">CET-Mentor is thinking...</span>', 'bot');
+        let fullResponse = "";
+        try {
+            const response = await fetch('/chat', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ message })
+            });
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            botBubble.innerHTML = ""; // Clear the thinking message
+
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+
+                const chunk = decoder.decode(value);
+                const lines = chunk.split('\\n');
+                lines.forEach(line => {
+                    if (line.startsWith('data:')) {
+                        try {
+                            const data = JSON.parse(line.substring(5));
+                            if (data.content) {
+                                fullResponse += data.content;
+                                // Basic markdown for bolding and newlines
+                                botBubble.innerHTML = fullResponse.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>').replace(/\\n/g, '<br>');
+                            }
+                            if (data.error) {
+                                botBubble.innerHTML = `<p class="text-red-400">${data.error}</p>`;
+                            }
+                        } catch (e) {}
+                    }
+                });
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            }
+        } catch (e) {
+            botBubble.innerHTML = '<p class="text-red-400">Could not connect to the AI service.</p>';
+        }
+    };
+
+    sendBtn.addEventListener('click', handleSend);
+    messageInput.addEventListener('keydown', (e) => { if(e.key === 'Enter') handleSend(); });
+</script>
 </body>
-</html>
-"""
+</html>"""
 
 if __name__ == '__main__':
-    # Note: Use a production WSGI server like Gunicorn or Waitress for deployment.
-    # Example: gunicorn --bind 0.0.0.0:8000 app:app
-    if client is None:
-        logger.critical("Cannot start Flask server: OpenAI client failed to initialize.")
-    else:
-        app.run(debug=True, port=5000)
+    app.run(debug=True, host='0.0.0.0', port=5000)

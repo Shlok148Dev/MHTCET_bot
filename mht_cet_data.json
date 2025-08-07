@@ -1,0 +1,77 @@
+[
+    {
+        "college": "Veermata Jijabai Technological Institute (VJTI), Mumbai",
+        "branch": "Computer Science and Engineering",
+        "closing_rank": 150
+    },
+    {
+        "college": "College of Engineering, Pune (CoEP)",
+        "branch": "Computer Science and Engineering", 
+        "closing_rank": 200
+    },
+    {
+        "college": "Sardar Patel Institute of Technology, Mumbai",
+        "branch": "Computer Science and Engineering",
+        "closing_rank": 500
+    },
+    {
+        "college": "Walchand College of Engineering, Sangli",
+        "branch": "Computer Science and Engineering",
+        "closing_rank": 800
+    },
+    {
+        "college": "MIT Academy of Engineering, Pune",
+        "branch": "Computer Science and Engineering",
+        "closing_rank": 1200
+    },
+    {
+        "college": "Vishwakarma Institute of Technology, Pune",
+        "branch": "Computer Science and Engineering",
+        "closing_rank": 1500
+    },
+    {
+        "college": "Thadomal Shahani Engineering College, Mumbai",
+        "branch": "Computer Science and Engineering",
+        "closing_rank": 2000
+    },
+    {
+        "college": "Government College of Engineering, Aurangabad",
+        "branch": "Computer Science and Engineering",
+        "closing_rank": 2500
+    },
+    {
+        "college": "K. J. Somaiya College of Engineering, Mumbai",
+        "branch": "Computer Science and Engineering",
+        "closing_rank": 3000
+    },
+    {
+        "college": "Fr. Conceicao Rodrigues College of Engineering, Mumbai",
+        "branch": "Computer Science and Engineering",
+        "closing_rank": 3500
+    },
+    {
+        "college": "Pillai College of Engineering, Navi Mumbai",
+        "branch": "Computer Science and Engineering",
+        "closing_rank": 4000
+    },
+    {
+        "college": "Ramrao Adik Institute of Technology, Navi Mumbai",
+        "branch": "Computer Science and Engineering",
+        "closing_rank": 4500
+    },
+    {
+        "college": "Shah & Anchor Kutchhi Engineering College, Mumbai",
+        "branch": "Computer Science and Engineering",
+        "closing_rank": 5000
+    },
+    {
+        "college": "Atharva College of Engineering, Mumbai",
+        "branch": "Computer Science and Engineering",
+        "closing_rank": 5500
+    },
+    {
+        "college": "Thakur College of Engineering & Technology, Mumbai",
+        "branch": "Computer Science and Engineering",
+        "closing_rank": 6000
+    }
+]
